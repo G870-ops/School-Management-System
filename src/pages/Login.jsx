@@ -169,7 +169,7 @@ const Login = () => {
         return;
       }
 
-      setError(resData?.message || 'Login failed. Please verify your credentials.');
+      setError(resData?.message || err.message || 'Login failed. Please verify your credentials.');
     } finally {
       setLoading(false);
     }
