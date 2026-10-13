@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { AuthContext } from '../context/AuthContext';
+import { getSocketUrl } from '../config/apiConfig';
 import { Send, MessageSquare, Radio } from 'lucide-react';
 
-const socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001', { autoConnect: false });
+const socket = io(getSocketUrl(), { autoConnect: false });
 
 const CHANNELS = [
   { id: 'school-wide-broadcast', name: '📢 School-Wide Broadcast', desc: 'Official general notices and alerts', roles: ['admin', 'teacher', 'student', 'parent'] },

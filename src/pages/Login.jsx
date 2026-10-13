@@ -343,7 +343,7 @@ const Login = () => {
       setSuccessMsg(response.data?.message || 'Account created! Enter the 6-digit verification OTP sent to your email.');
 
       if (response.data?.data?.otp) {
-        setSuccessMsg(`Development Mode: Verification OTP is ${response.data.data.otp}`);
+        setSuccessMsg(`Account created! Verification code: ${response.data.data.otp}`);
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Student registration failed. Please try again.');
@@ -369,12 +369,13 @@ const Login = () => {
       });
       setSchoolStep('otp');
       setResendCooldown(60);
-      setSuccessMsg('Verification OTP has been sent to the official school email.');
-      if (response.data?.otp) {
-        setSuccessMsg(`Development Mode OTP: ${response.data.otp}`);
-      }
+      setSuccessMsg(
+        response.data?.otp
+          ? `Verification OTP sent to ${schoolData.email.trim()}! Code: ${response.data.otp}`
+          : (response.data?.message || 'Verification OTP has been sent to the official school email.')
+      );
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to send school registration OTP.');
+      setError(err.response?.data?.message || err.message || 'Failed to send school registration OTP.');
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axiosInstance from '../api/axiosInstance';
+import { getApiBaseUrl } from '../config/apiConfig';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   UserCheck,
@@ -331,7 +332,7 @@ const VisitorGatePass = () => {
                   onClick={(e) => e.stopPropagation()}
                 >
                   <QRCodeSVG
-                    value={`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api'}/visitors/verify/${pass.passCode}`}
+                    value={`${getApiBaseUrl()}/visitors/verify/${pass.passCode}`}
                     size={120}
                     bgColor="#ffffff"
                     fgColor="#4f46e5"
