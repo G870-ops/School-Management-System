@@ -1,0 +1,10 @@
+/* Global App Styling Utilities */
+.glass-card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.gradient-header {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+}
