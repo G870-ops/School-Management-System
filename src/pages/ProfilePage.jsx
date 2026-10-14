@@ -97,9 +97,9 @@ const ProfilePage = () => {
       });
       setPwdMsg({ type: 'success', text: res.data?.message || 'Password updated successfully! Please log in again.' });
       setPwdData({ current: '', newPwd: '', confirm: '' });
-      // Auto logout after password change
-      setTimeout(() => {
-        logout();
+      // Auto logout after password change — also invalidates token on the server
+      setTimeout(async () => {
+        await logout();
         navigate('/login');
       }, 2500);
     } catch (err) {
@@ -347,7 +347,7 @@ const ProfilePage = () => {
                     Logging out will immediately invalidate your session.
                   </p>
                   <button
-                    onClick={() => { logout(); navigate('/login'); }}
+                    onClick={async () => { await logout(); navigate('/login'); }}
                     className="flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-semibold text-sm transition shadow-sm shadow-red-600/20"
                   >
                     <LogOut className="w-4 h-4" />
