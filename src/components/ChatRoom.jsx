@@ -2,7 +2,8 @@ import React, { useState, useEffect, useContext, useRef, useCallback } from 'rea
 import { io } from 'socket.io-client';
 import { AuthContext } from '../context/AuthContext';
 import { getSocketUrl } from '../config/apiConfig';
-import { Send, MessageSquare, Radio, RefreshCw, AlertCircle } from 'lucide-react';
+import axiosInstance from '../api/axiosInstance';
+import { Send, MessageSquare, Radio, RefreshCw, AlertCircle, Cloud } from 'lucide-react';
 
 let socketInstance = null;
 const getSocket = () => {
@@ -15,9 +16,9 @@ const getSocket = () => {
       autoConnect: false,
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1500,
+      timeout: 8000,
     });
   }
   return socketInstance;
@@ -37,7 +38,8 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [connectionError, setConnectionError] = useState('');
-  const [isConnected, setIsConnected] = useState(false);
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const messagesEndRef = useRef(null);
 
@@ -46,38 +48,37 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
     ? selectedRoom
     : visibleChannels[0]?.id || '';
 
+  // 1. Socket.io Connection Management (Real-Time WebSocket)
   const connectSocket = useCallback(() => {
     const token = localStorage.getItem('token');
     const socket = getSocket();
 
     if (!token) {
       socket.disconnect();
-      setIsConnected(false);
-      setConnectionError('Authentication token missing. Please sign in to join chat.');
+      setIsSocketConnected(false);
       return;
     }
 
     const handleConnect = () => {
-      setIsConnected(true);
+      setIsSocketConnected(true);
       setConnectionError('');
       setIsRetrying(false);
     };
 
     const handleDisconnect = () => {
-      setIsConnected(false);
+      setIsSocketConnected(false);
     };
 
     const handleConnectError = (err) => {
-      setIsConnected(false);
+      setIsSocketConnected(false);
       setIsRetrying(false);
-      const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-      const fallbackMsg = isLocal
-        ? 'Chat connection failed. Please ensure the backend server is running on port 5001.'
-        : 'Chat connection failed. Real-time chat requires a persistent WebSocket server.';
-      const detailedMsg = err?.message && err.message !== 'xhr poll error' && err.message !== 'websocket error'
-        ? err.message
-        : fallbackMsg;
-      setConnectionError(detailedMsg);
+      // If error is an explicit auth issue, show it; otherwise silently fallback to Cloud Sync (HTTP REST)
+      if (err?.message && err.message.toLowerCase().includes('auth')) {
+        setConnectionError(err.message);
+      } else {
+        // Transparent fallback to HTTP cloud sync on serverless environments like Vercel
+        setConnectionError('');
+      }
     };
 
     socket.auth = { token };
@@ -90,7 +91,7 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
     socket.on('connect_error', handleConnectError);
 
     if (socket.connected) {
-      setIsConnected(true);
+      setIsSocketConnected(true);
       setConnectionError('');
     } else {
       socket.connect();
@@ -101,27 +102,66 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
     connectSocket();
   }, [connectSocket, user?._id]);
 
-  const handleRetry = () => {
-    setIsRetrying(true);
-    setConnectionError('');
-    const socket = getSocket();
-    socket.disconnect();
-    connectSocket();
-  };
+  // 2. Fetch Initial Messages and Set Up Cloud-Sync Polling Fallback
+  useEffect(() => {
+    if (!currentRoom) return undefined;
+    let isMounted = true;
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+    const fetchHistory = async () => {
+      try {
+        setIsCloudSyncing(true);
+        const res = await axiosInstance.get(`/chat/messages/${encodeURIComponent(currentRoom)}`);
+        if (isMounted && res.data?.success && Array.isArray(res.data.data)) {
+          setMessages(res.data.data);
+          setConnectionError('');
+        }
+      } catch (err) {
+        if (isMounted && err.response?.status === 401) {
+          setConnectionError('Session expired. Please sign in again.');
+        }
+      } finally {
+        if (isMounted) setIsCloudSyncing(false);
+      }
+    };
 
+    fetchHistory();
+
+    // If WebSocket is not connected (e.g., serverless Vercel cloud deployment), sync via HTTP polling every 3.5s
+    let syncInterval = null;
+    if (!isSocketConnected) {
+      syncInterval = setInterval(async () => {
+        try {
+          const res = await axiosInstance.get(`/chat/messages/${encodeURIComponent(currentRoom)}`);
+          if (isMounted && res.data?.success && Array.isArray(res.data.data)) {
+            setMessages((prev) => {
+              const existingIds = new Set(
+                prev.map((m) => m._id || `${m.senderId}-${m.timestamp}-${m.message}`)
+              );
+              const newItems = res.data.data.filter(
+                (m) => !existingIds.has(m._id || `${m.senderId}-${m.timestamp}-${m.message}`)
+              );
+              if (newItems.length === 0) return prev;
+              return [...prev, ...newItems];
+            });
+          }
+        } catch (_) {}
+      }, 3500);
+    }
+
+    return () => {
+      isMounted = false;
+      if (syncInterval) clearInterval(syncInterval);
+    };
+  }, [currentRoom, isSocketConnected]);
+
+  // 3. Listen for Real-Time Socket.io Room Messages
   useEffect(() => {
     if (!currentRoom) return undefined;
     const socket = getSocket();
 
     const joinRoom = () => {
       socket.emit('join_room', currentRoom, (result) => {
-        if (!result?.success) {
-          setConnectionError(result?.message || 'Unable to join this chat channel.');
-        } else {
+        if (result?.success) {
           setConnectionError('');
         }
       });
@@ -129,7 +169,14 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
 
     const handleIncomingMessage = (data) => {
       if (data && data.roomId === currentRoom) {
-        setMessages((prev) => [...prev, data]);
+        setMessages((prev) => {
+          // Avoid duplicate messages if optimistic add or polling already caught it
+          const exists = prev.some(
+            (m) => (data._id && m._id === data._id) || (m.timestamp === data.timestamp && m.message === data.message && String(m.senderId) === String(data.senderId))
+          );
+          if (exists) return prev;
+          return [...prev, data];
+        });
       }
     };
 
@@ -143,28 +190,69 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
     };
   }, [currentRoom, user?._id]);
 
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (!messageInput.trim() || !user) return;
+  const handleRetry = () => {
+    setIsRetrying(true);
+    setConnectionError('');
     const socket = getSocket();
+    socket.disconnect();
+    connectSocket();
+  };
 
-    if (!socket.connected) {
-      setConnectionError('Cannot send: Chat is currently offline. Please click retry to reconnect.');
-      return;
-    }
-
-    socket.emit('send_message', { roomId: currentRoom, message: messageInput.trim() }, (result) => {
-      if (!result?.success) {
-        setConnectionError(result?.message || 'Message could not be sent.');
-      } else {
-        setConnectionError('');
-      }
-    });
+  // 4. Send Message Handler (Dual Engine: WebSocket with REST API Fallback)
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    const trimmed = messageInput.trim();
+    if (!trimmed || !user) return;
     setMessageInput('');
+
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage = {
+      _id: tempId,
+      roomId: currentRoom,
+      senderId: user._id,
+      sender: user.name,
+      senderRole: user.role,
+      message: trimmed,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    // Optimistically update the UI instantly
+    setMessages((prev) => [...prev, optimisticMessage]);
+
+    const socket = getSocket();
+    if (socket && socket.connected) {
+      socket.emit('send_message', { roomId: currentRoom, message: trimmed }, async (result) => {
+        if (!result?.success) {
+          // If socket delivery fails, smoothly fallback to REST API
+          try {
+            const res = await axiosInstance.post('/chat/send', { roomId: currentRoom, message: trimmed });
+            if (res.data?.success && res.data.data) {
+              setMessages((prev) => prev.map((m) => (m._id === tempId ? res.data.data : m)));
+            }
+          } catch (restErr) {
+            setConnectionError(restErr.response?.data?.message || 'Message could not be sent.');
+          }
+        }
+      });
+    } else {
+      // Cloud serverless environment (Vercel) -> send via secure HTTP endpoint
+      try {
+        const res = await axiosInstance.post('/chat/send', { roomId: currentRoom, message: trimmed });
+        if (res.data?.success && res.data.data) {
+          setMessages((prev) => prev.map((m) => (m._id === tempId ? res.data.data : m)));
+        }
+      } catch (err) {
+        setConnectionError(err.response?.data?.message || 'Failed to send message. Please try again.');
+      }
+    }
   };
 
   return (
@@ -178,18 +266,23 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-bold text-slate-800 text-sm">Real-Time School Communication</h3>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                  isConnected
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border border-amber-200'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                {isConnected ? 'Live' : 'Offline'}
-              </span>
+              {isSocketConnected ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live (WebSocket)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  <Cloud className="w-3 h-3 text-indigo-500" />
+                  Cloud Sync (Live)
+                </span>
+              )}
             </div>
-            <p className="text-xs text-slate-500">Instant Socket.io encrypted room messaging</p>
+            <p className="text-xs text-slate-500">
+              {isSocketConnected
+                ? 'Instant Socket.io encrypted room messaging'
+                : 'High-speed cloud synchronized room messaging'}
+            </p>
           </div>
         </div>
 
@@ -242,7 +335,7 @@ const ChatRoom = ({ defaultRoomId = 'school-wide-broadcast', roomId }) => {
           messages.map((msg, index) => {
             const isSelf = String(msg.senderId) === String(user?._id);
             return (
-              <div key={index} className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}>
+              <div key={msg._id || index} className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}>
                 <div className="flex items-center space-x-2 mb-1">
                   <span className="text-xs font-semibold text-slate-700">{msg.sender}</span>
                   <span
