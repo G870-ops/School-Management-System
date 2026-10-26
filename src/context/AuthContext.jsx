@@ -21,7 +21,7 @@ export const AuthProvider = ({ children }) => {
         return;
       }
       try {
-        const { data } = await axiosInstance.get('/api/auth/me');
+        const { data } = await axiosInstance.get('/auth/me');
         if (data?.success && data?.data) {
           setUser(data.data);
           setToken(storedToken);
@@ -80,7 +80,7 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(async () => {
     try {
       // Bump tokenVersion on server so all existing JWTs are immediately invalid
-      await axiosInstance.post('/api/auth/logout');
+      await axiosInstance.post('/auth/logout');
     } catch {
       // Proceed with client-side cleanup even if the network call fails
     } finally {
